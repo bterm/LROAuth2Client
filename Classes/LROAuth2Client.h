@@ -16,9 +16,9 @@
   NSString *clientID;
   NSString *clientSecret;
   NSURL *redirectURL;
-  NSURL *cancelURL;
   NSURL *userURL;
   NSURL *tokenURL;
+  NSString *accessCode;
   LROAuth2AccessToken *accessToken;
   NSMutableArray *requests;
   id<LROAuth2ClientDelegate> delegate;
@@ -30,9 +30,9 @@
 @property (nonatomic, copy) NSString *clientID;
 @property (nonatomic, copy) NSString *clientSecret;
 @property (nonatomic, copy) NSURL *redirectURL;
-@property (nonatomic, copy) NSURL *cancelURL;
 @property (nonatomic, copy) NSURL *userURL;
 @property (nonatomic, copy) NSURL *tokenURL;
+@property (nonatomic, copy) NSString *accessCode;
 @property (nonatomic, readonly) LROAuth2AccessToken *accessToken;
 @property (nonatomic, assign) id<LROAuth2ClientDelegate> delegate;
 @property (nonatomic, assign) BOOL debug;
@@ -42,7 +42,7 @@
            redirectURL:(NSURL *)url;
 
 - (NSURLRequest *)userAuthorizationRequestWithParameters:(NSDictionary *)additionalParameters;
-- (void)verifyAuthorizationWithAccessCode:(NSString *)accessCode;
+- (void)verifyAuthorizationWithAccessCode:(NSString *)accessCode parameters:(NSDictionary *)additionalParameters;
 - (void)refreshAccessToken:(LROAuth2AccessToken *)_accessToken;
 @end
 

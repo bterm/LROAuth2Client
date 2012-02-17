@@ -6,12 +6,12 @@
 //  Copyright 2010 LJR Software Limited. All rights reserved.
 //
 
-#import <YAJLIOS/NSObject+YAJL.h>
 #import "LROAuth2Client.h"
 #import "ASIHTTPRequest.h"
 #import "NSURL+QueryInspector.h"
 #import "LROAuth2AccessToken.h"
 #import "NSDictionary+QueryString.h"
+#import "JSONKit.h"
 
 #pragma mark -
 
@@ -20,10 +20,10 @@
 @synthesize clientID;
 @synthesize clientSecret;
 @synthesize redirectURL;
-@synthesize cancelURL;
 @synthesize userURL;
 @synthesize tokenURL;
 @synthesize delegate;
+@synthesize accessCode;
 @synthesize accessToken;
 @synthesize debug;
 
@@ -49,12 +49,12 @@
   }
   [requests release];
   [accessToken release];
+  [accessCode release];
   [clientID release];
   [clientSecret release];
   [userURL release];
   [tokenURL release];
   [redirectURL release];
-  [cancelURL release];
   [super dealloc];
 }
 
@@ -80,7 +80,7 @@
   return [[authRequest copy] autorelease];
 }
 
-- (void)verifyAuthorizationWithAccessCode:(NSString *)accessCode;
+- (void)verifyAuthorizationWithAccessCode:(NSString *)code parameters:(NSDictionary *)additionalParameters;
 {
   @synchronized(self) {
     if (isVerifying) return; // don't allow more than one auth request
@@ -92,7 +92,13 @@
     [params setValue:clientID forKey:@"client_id"];
     [params setValue:[redirectURL absoluteString] forKey:@"redirect_uri"];
     [params setValue:clientSecret forKey:@"client_secret"];
-    [params setValue:accessCode forKey:@"code"];
+    [params setValue:code forKey:@"code"];
+    
+    if (additionalParameters) {
+      for (NSString *key in additionalParameters) {
+        [params setValue:[additionalParameters valueForKey:key] forKey:key];
+      }
+    }
     
     ASIHTTPRequest *request = [ASIHTTPRequest requestWithURL:self.tokenURL];
     [request setRequestMethod:@"POST"];
@@ -154,12 +160,9 @@
 - (void)request:(ASIHTTPRequest *)request didReceiveData:(NSData *)rawData
 {
   NSData* data = rawData;
-  if( [request isResponseCompressed]) {
-    data = [ASIHTTPRequest uncompressZippedData:rawData];
-  }
     
   NSError *parseError = nil;
-  NSDictionary *authorizationData = [data yajl_JSON:&parseError];
+  NSDictionary *authorizationData = [data objectFromJSONData];
   
   if (parseError) {
     // try and decode the response body as a query string instead
@@ -167,7 +170,7 @@
     authorizationData = [NSDictionary dictionaryWithFormEncodedString:responseString];
     [responseString release];
     if ([authorizationData valueForKey:@"access_token"] == nil) { 
-      // TODO handle complete parsing failure
+      // TODO: handle complete parsing failure
       NSAssert(NO, @"Unhandled parsing failure");
     }
   }  
@@ -205,16 +208,18 @@
     [self extractAccessCodeFromCallbackURL:request.URL];
 
     return NO;
-  } else if (self.cancelURL && [[request.URL absoluteString] hasPrefix:[self.cancelURL absoluteString]]) {
-    if ([self.delegate respondsToSelector:@selector(oauthClientDidCancel:)]) {
-      [self.delegate oauthClientDidCancel:self];
-    }
-    
-    return NO;
   }
   
   if ([self.delegate respondsToSelector:@selector(webView:shouldStartLoadWithRequest:navigationType:)]) {
     return [self.delegate webView:webView shouldStartLoadWithRequest:request navigationType:navigationType];
+  } else if ([[request.URL queryDictionary] valueForKey:@"error"]) {
+    NSString *errorCode = [[request.URL queryDictionary] valueForKey:@"error"];
+  
+    if ([errorCode isEqualToString:@"access_denied"]) {
+      if ([self.delegate respondsToSelector:@selector(oauthClientDidCancel:)]) {
+        [self.delegate oauthClientDidCancel:self];
+      }
+    }
   }
   
   return YES;
@@ -232,13 +237,22 @@
   NSString *failingURLString = [error.userInfo objectForKey:NSURLErrorFailingURLStringErrorKey];
 #endif
   
+  NSURL *failingUrl = [NSURL URLWithString:failingURLString];
+  
   if ([failingURLString hasPrefix:[self.redirectURL absoluteString]]) {
     [webView stopLoading];
-    [self extractAccessCodeFromCallbackURL:[NSURL URLWithString:failingURLString]];
-  } else if (self.cancelURL && [failingURLString hasPrefix:[self.cancelURL absoluteString]]) {
-    [webView stopLoading];
-    if ([self.delegate respondsToSelector:@selector(oauthClientDidCancel:)]) {
-      [self.delegate oauthClientDidCancel:self];
+
+    // if the url has parameter 'code' then we got back an access token, otherwise there was an error
+    if ([[failingUrl queryDictionary] valueForKey:@"code"]) {
+      [self extractAccessCodeFromCallbackURL:[NSURL URLWithString:failingURLString]];
+    } else if ([[failingUrl queryDictionary] valueForKey:@"error"]) {
+      NSString *errorCode = [[failingUrl queryDictionary] valueForKey:@"error"];
+
+      if ([errorCode isEqualToString:@"access_denied"]) {
+        if ([self.delegate respondsToSelector:@selector(oauthClientDidCancel:)]) {
+          [self.delegate oauthClientDidCancel:self];
+        }
+      }
     }
   }
   
@@ -263,12 +277,13 @@
 
 - (void)extractAccessCodeFromCallbackURL:(NSURL *)callbackURL;
 {
-  NSString *accessCode = [[callbackURL queryDictionary] valueForKey:@"code"];
+  accessCode = [[callbackURL queryDictionary] valueForKey:@"code"];
   
   if ([self.delegate respondsToSelector:@selector(oauthClientDidReceiveAccessCode:)]) {
     [self.delegate oauthClientDidReceiveAccessCode:self];
+  } else {
+    [self verifyAuthorizationWithAccessCode:accessCode parameters:nil];
   }
-  [self verifyAuthorizationWithAccessCode:accessCode];
 }
 
 @end
